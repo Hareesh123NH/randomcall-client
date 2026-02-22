@@ -48,31 +48,114 @@ export default function VideoChat() {
   }, []);
 
   // 2️⃣ Start media + peer connection
+  // 2️⃣ Start media + peer connection
   useEffect(() => {
+    let peer;
+
     const initCall = async () => {
       const stream = await startMedia();
 
-      const peer = new RTCPeerConnection({
+      peer = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
 
       peerRef.current = peer;
 
-      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+      // Add local tracks
+      stream.getTracks().forEach((track) => {
+        peer.addTrack(track, stream);
+      });
 
+      // When remote stream arrives
       peer.ontrack = (e) => {
         remoteVideo.current.srcObject = e.streams[0];
-        setConnecting(false);
       };
 
+      // ICE candidates
       peer.onicecandidate = (e) => {
         if (e.candidate) {
           socket.emit("signal", { candidate: e.candidate });
         }
       };
+
+      // Connection state
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "connected") {
+          setConnecting(false);
+        }
+      };
+
+      /* ---------------- SIGNALING ---------------- */
+
+      // Create offer (first user)
+      socket.on("create-offer", async () => {
+        console.log("🟡 Creating offer");
+
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+
+        socket.emit("signal", { offer });
+      });
+
+      // Second user waits
+      socket.on("wait-offer", () => {
+        console.log("🟢 Waiting for offer...");
+      });
+
+      // Receive signal
+      socket.on("signal", async (data) => {
+        try {
+          if (data.offer) {
+            console.log("📩 Offer received");
+
+            await peer.setRemoteDescription(
+              new RTCSessionDescription(data.offer)
+            );
+
+            const answer = await peer.createAnswer();
+            await peer.setLocalDescription(answer);
+
+            socket.emit("signal", { answer });
+          }
+
+          if (data.answer) {
+            console.log("📩 Answer received");
+
+            await peer.setRemoteDescription(
+              new RTCSessionDescription(data.answer)
+            );
+          }
+
+          if (data.candidate) {
+            await peer.addIceCandidate(
+              new RTCIceCandidate(data.candidate)
+            );
+          }
+        } catch (err) {
+          console.error("Signal error:", err);
+        }
+      });
+
+      // Partner left
+      socket.on("partner-left", () => {
+        console.log("❌ Partner left");
+        setConnecting(true);
+        remoteVideo.current.srcObject = null;
+      });
     };
 
     initCall();
+
+    return () => {
+      socket.off("create-offer");
+      socket.off("wait-offer");
+      socket.off("signal");
+      socket.off("partner-left");
+
+      if (peer) {
+        peer.close();
+      }
+    };
   }, [startMedia]);
 
   useEffect(() => {
@@ -112,9 +195,8 @@ export default function VideoChat() {
     <div className="h-screen bg-[#0f172a] text-white flex overflow-hidden">
       {/* VIDEO AREA */}
       <div
-        className={`${
-          showChat ? "w-2/3" : "w-full"
-        } relative transition-all duration-300`}
+        className={`${showChat ? "w-2/3" : "w-full"
+          } relative transition-all duration-300`}
       >
         <VideoSection
           connecting={connecting}
