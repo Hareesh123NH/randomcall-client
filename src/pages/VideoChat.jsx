@@ -32,7 +32,6 @@ export default function VideoChat() {
 
   /* ---------------- AUTO START CALL ---------------- */
   // 1️⃣ Connect socket when component mounts
-  // 1️⃣ Connect socket when component mounts
   useEffect(() => {
     socket.connect();
 
@@ -48,115 +47,133 @@ export default function VideoChat() {
   }, []);
 
   // 2️⃣ Start media + peer connection
-  // 2️⃣ Start media + peer connection
   useEffect(() => {
-    let peer;
-
     const initCall = async () => {
       const stream = await startMedia();
-
-      peer = new RTCPeerConnection({
+  
+      const peer = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
-
+  
       peerRef.current = peer;
-
-      // Add local tracks
+  
       stream.getTracks().forEach((track) => {
         peer.addTrack(track, stream);
       });
-
-      // When remote stream arrives
+  
       peer.ontrack = (e) => {
-        remoteVideo.current.srcObject = e.streams[0];
+        if (remoteVideo.current) {
+          remoteVideo.current.srcObject = e.streams[0];
+        }
       };
-
-      // ICE candidates
+  
       peer.onicecandidate = (e) => {
         if (e.candidate) {
           socket.emit("signal", { candidate: e.candidate });
         }
       };
-
-      // Connection state
+  
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === "connected") {
           setConnecting(false);
         }
       };
+    };
+  
+    initCall();
+  
+    return () => {
+      if (peerRef.current) {
+        peerRef.current.close();
+      }
+    };
+  }, [startMedia]);
 
-      /* ---------------- SIGNALING ---------------- */
 
-      // Create offer (first user)
-      socket.on("create-offer", async () => {
-        console.log("🟡 Creating offer");
 
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
+  useEffect(() => {
+    let pendingCandidates = [];
 
-        socket.emit("signal", { offer });
-      });
-
-      // Second user waits
-      socket.on("wait-offer", () => {
-        console.log("🟢 Waiting for offer...");
-      });
-
-      // Receive signal
-      socket.on("signal", async (data) => {
-        try {
-          if (data.offer) {
-            console.log("📩 Offer received");
-
-            await peer.setRemoteDescription(
-              new RTCSessionDescription(data.offer)
-            );
-
-            const answer = await peer.createAnswer();
-            await peer.setLocalDescription(answer);
-
-            socket.emit("signal", { answer });
+    socket.on("chat-message", msg =>
+      setMessages(p => [...p, { self: false, text: msg }])
+    );
+  
+    socket.on("create-offer", async () => {
+      const peer = peerRef.current;
+      if (!peer) return;
+  
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+  
+      socket.emit("signal", { offer });
+    });
+  
+    socket.on("wait-offer", () => {
+      console.log("🟢 Waiting for offer...");
+    });
+  
+    socket.on("signal", async (data) => {
+      const peer = peerRef.current;
+      if (!peer) return;
+  
+      try {
+        if (data.offer) {
+          await peer.setRemoteDescription(
+            new RTCSessionDescription(data.offer)
+          );
+  
+          // Add queued candidates
+          for (const c of pendingCandidates) {
+            await peer.addIceCandidate(new RTCIceCandidate(c));
           }
-
-          if (data.answer) {
-            console.log("📩 Answer received");
-
-            await peer.setRemoteDescription(
-              new RTCSessionDescription(data.answer)
-            );
+          pendingCandidates = [];
+  
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+  
+          socket.emit("signal", { answer });
+        }
+  
+        if (data.answer) {
+          await peer.setRemoteDescription(
+            new RTCSessionDescription(data.answer)
+          );
+  
+          // Add queued candidates
+          for (const c of pendingCandidates) {
+            await peer.addIceCandidate(new RTCIceCandidate(c));
           }
-
-          if (data.candidate) {
+          pendingCandidates = [];
+        }
+  
+        if (data.candidate) {
+          if (peer.remoteDescription) {
             await peer.addIceCandidate(
               new RTCIceCandidate(data.candidate)
             );
+          } else {
+            pendingCandidates.push(data.candidate);
           }
-        } catch (err) {
-          console.error("Signal error:", err);
         }
-      });
-
-      // Partner left
-      socket.on("partner-left", () => {
-        console.log("❌ Partner left");
-        setConnecting(true);
+      } catch (err) {
+        console.error("Signal error:", err);
+      }
+    });
+  
+    socket.on("partner-left", () => {
+      setConnecting(true);
+      if (remoteVideo.current) {
         remoteVideo.current.srcObject = null;
-      });
-    };
-
-    initCall();
-
+      }
+    });
+  
     return () => {
       socket.off("create-offer");
       socket.off("wait-offer");
       socket.off("signal");
       socket.off("partner-left");
-
-      if (peer) {
-        peer.close();
-      }
     };
-  }, [startMedia]);
+  }, []);~
 
   useEffect(() => {
     if (localVideo.current && localStream) {
@@ -216,7 +233,7 @@ export default function VideoChat() {
 
       {/* CHAT AREA */}
       {showChat && (
-        <div className="w-1/3 min-w-[300px] border-l border-gray-700 bg-[#1e293b]">
+        <div className="w-1/3 min-w-75 border-l border-gray-700 bg-[#1e293b]">
           <ChatPanel
             messages={messages}
             message={message}
