@@ -1,12 +1,14 @@
-import VideoChat from "./VideoChat";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Home from "./Home";
+import VideoChat from "./pages/VideoChat";
 
-function App() {
-
+export default function App() {
   return (
-    <div>
-      <VideoChat />
-    </div>
+    <Router>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/call" element={<VideoChat />} />
+      </Routes>
+    </Router>
   );
 }
-
-export default App;
