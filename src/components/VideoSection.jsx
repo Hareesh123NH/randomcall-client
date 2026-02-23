@@ -1,12 +1,45 @@
-export default function VideoSection({
-    connecting,
-    localVideo,
-    remoteVideo,
-    camOn,
-  }) {
+// export default function VideoSection({ connecting, localVideo, remoteVideo, camOn }) {
+//   return (
+//     <div className="w-full h-full bg-black relative flex items-center justify-center">
+//       {connecting && (
+//         <div className="absolute flex flex-col items-center gap-4 z-10">
+//           <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+//           <p className="text-gray-300">Connecting...</p>
+//         </div>
+//       )}
+
+//       <video
+//         ref={remoteVideo}
+//         autoPlay
+//         playsInline
+//         className="w-full h-full object-cover scale-x-[-1] transition-all duration-300"
+//       />
+
+//       {/* Local preview */}
+//       <div className="absolute bottom-6 right-6 w-44 h-32 rounded-xl overflow-hidden border border-gray-600 bg-black">
+//         <video
+//           ref={localVideo}
+//           autoPlay
+//           muted
+//           playsInline
+//           className="w-full h-full object-cover scale-x-[-1]"
+//         />
+//         {!camOn && (
+//           <div className="absolute inset-0 bg-black flex items-center justify-center text-sm text-gray-200">
+//             Camera Off
+//           </div>
+//         )}
+//       </div>
+//     </div>
+//   );
+// }
+
+
+
+export default function VideoSection({ connecting, localVideo, remoteVideo, camOn }) {
     return (
       <div className="w-full h-full bg-black relative flex items-center justify-center">
-  
+        {/* Connecting overlay */}
         {connecting && (
           <div className="absolute flex flex-col items-center gap-4 z-10">
             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
@@ -14,11 +47,12 @@ export default function VideoSection({
           </div>
         )}
   
+        {/* Remote video */}
         <video
           ref={remoteVideo}
           autoPlay
           playsInline
-          className="w-full h-full object-cover scale-x-[-1]"
+          className="w-full h-full object-contain scale-x-[-1] transition-all duration-300"
         />
   
         {/* Local preview */}
@@ -28,10 +62,10 @@ export default function VideoSection({
             autoPlay
             muted
             playsInline
-            className="w-full h-full object-cover scale-x-[-1]"
+            className="w-full h-full object-contain scale-x-[-1]"
           />
           {!camOn && (
-            <div className="absolute inset-0 bg-black flex items-center justify-center text-sm">
+            <div className="absolute inset-0 bg-black flex items-center justify-center text-sm text-gray-200">
               Camera Off
             </div>
           )}

@@ -12,26 +12,33 @@ export default function VideoChat() {
   const [localStream, setLocalStream] = useState(null);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
-  const [showChat, setShowChat] = useState(true); // ✅ chat open by default
+  const [showChat, setShowChat] = useState(true);
   const [connecting, setConnecting] = useState(true);
 
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
 
-  /* ---------------- START MEDIA ---------------- */
+  const pendingCandidates = useRef([]);
 
+  /* ---------------- START MEDIA ---------------- */
   const startMedia = useCallback(async () => {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: true,
     });
-
     setLocalStream(stream);
+
     return stream;
   }, []);
 
-  /* ---------------- AUTO START CALL ---------------- */
-  // 1️⃣ Connect socket when component mounts
+  /* ---------------- ASSIGN LOCAL VIDEO ---------------- */
+  useEffect(() => {
+    // ✅ Assign localStream to video element after it exists
+    if (localVideo.current && localStream) {
+      localVideo.current.srcObject = localStream;
+    }
+  }, [localStream]);
+  /* ---------------- SOCKET + PEER ---------------- */
   useEffect(() => {
     socket.connect();
 
@@ -40,155 +47,118 @@ export default function VideoChat() {
       socket.emit("ready");
     });
 
+    socket.on("create-offer", async () => {
+      const stream = await startMedia();
+      setupPeer(stream, true);
+    });
+
+    socket.on("wait-offer", async () => {
+      const stream = await startMedia();
+      setupPeer(stream, false);
+    });
+
+    socket.on("chat-message", (msg) => {
+      setMessages((prev) => [...prev, { self: false, text: msg }]);
+    });
+
+    socket.on("partner-left", () => {
+      setConnecting(true);
+      if (remoteVideo.current) remoteVideo.current.srcObject = null;
+      if (peerRef.current) peerRef.current.close();
+      peerRef.current = null;
+    });
+
     return () => {
-      socket.off("connect"); // remove listener
+      socket.off("connect");
+      socket.off("create-offer");
+      socket.off("wait-offer");
+      socket.off("chat-message");
+      socket.off("partner-left");
       socket.disconnect();
     };
   }, []);
 
-  // 2️⃣ Start media + peer connection
-  useEffect(() => {
-    const initCall = async () => {
-      const stream = await startMedia();
+  /* ---------------- PEER SETUP ---------------- */
+  const setupPeer = (stream, isOfferer) => {
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    peerRef.current = peer;
 
-      const peer = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+    // Add local tracks
+    stream.getTracks().forEach((track) => peer.addTrack(track, stream));
 
-      peerRef.current = peer;
-
-      stream.getTracks().forEach((track) => {
-        peer.addTrack(track, stream);
-      });
-
-      peer.ontrack = (e) => {
-        if (remoteVideo.current) {
-          remoteVideo.current.srcObject = e.streams[0];
-        }
-      };
-
-      peer.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit("signal", { candidate: e.candidate });
-        }
-      };
-
-      peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "connected") {
-          setConnecting(false);
-        }
-      };
-    };
-
-    initCall();
-
-    return () => {
-      if (peerRef.current) {
-        peerRef.current.close();
+    // Show remote stream
+    peer.ontrack = (e) => {
+      if (remoteVideo.current) {
+        remoteVideo.current.srcObject = e.streams[0];
       }
     };
-  }, [startMedia]);
 
-
-
-  useEffect(() => {
-    let pendingCandidates = [];
-
-
-
-    const handleChat = msg => {
-      setMessages(p => [...p, { self: false, text: msg }]);
+    // ICE candidate
+    peer.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.emit("signal", { candidate: e.candidate });
+      }
     };
 
+    // Connection state
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "connected") setConnecting(false);
+    };
 
-    socket.on("chat-message",handleChat);
-
-    socket.on("create-offer", async () => {
-      const peer = peerRef.current;
-      if (!peer) return;
-
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-
-      socket.emit("signal", { offer });
-    });
-
-    socket.on("wait-offer", () => {
-      console.log("🟢 Waiting for offer...");
-    });
-
+    // Handle signals
     socket.on("signal", async (data) => {
-      const peer = peerRef.current;
-      if (!peer) return;
-
       try {
         if (data.offer) {
-          await peer.setRemoteDescription(
-            new RTCSessionDescription(data.offer)
-          );
-
-          // Add queued candidates
-          for (const c of pendingCandidates) {
-            await peer.addIceCandidate(new RTCIceCandidate(c));
-          }
-          pendingCandidates = [];
-
+          await peer.setRemoteDescription(data.offer);
           const answer = await peer.createAnswer();
           await peer.setLocalDescription(answer);
-
           socket.emit("signal", { answer });
         }
 
         if (data.answer) {
-          await peer.setRemoteDescription(
-            new RTCSessionDescription(data.answer)
-          );
-
-          // Add queued candidates
-          for (const c of pendingCandidates) {
-            await peer.addIceCandidate(new RTCIceCandidate(c));
-          }
-          pendingCandidates = [];
+          await peer.setRemoteDescription(data.answer);
         }
 
         if (data.candidate) {
           if (peer.remoteDescription) {
-            await peer.addIceCandidate(
-              new RTCIceCandidate(data.candidate)
-            );
+            await peer.addIceCandidate(data.candidate);
           } else {
-            pendingCandidates.push(data.candidate);
+            pendingCandidates.current.push(data.candidate);
           }
+        }
+
+        // Add queued candidates once remoteDescription is set
+        if (peer.remoteDescription && pendingCandidates.current.length) {
+          for (const c of pendingCandidates.current) {
+            await peer.addIceCandidate(c);
+          }
+          pendingCandidates.current = [];
         }
       } catch (err) {
         console.error("Signal error:", err);
       }
     });
 
-    socket.on("partner-left", () => {
-      setConnecting(true);
-      if (remoteVideo.current) {
-        remoteVideo.current.srcObject = null;
-      }
-    });
+    // If offerer, create offer immediately
+    if (isOfferer) {
+      createOffer(peer);
+    }
 
-    return () => {
-      socket.off("create-offer");
-      socket.off("wait-offer");
-      socket.off("signal");
-      socket.off("partner-left");
-      socket.off("chat-message", handleChat);   
-    };
-  }, []); ~
+    // Set local video
+    if (localVideo.current) {
+      localVideo.current.srcObject = stream;
+    }
+  };
 
-    useEffect(() => {
-      if (localVideo.current && localStream) {
-        localVideo.current.srcObject = localStream;
-      }
-    }, [localStream]);
+  const createOffer = async (peer) => {
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    socket.emit("signal", { offer });
+  };
 
   /* ---------------- TOGGLES ---------------- */
-
   const toggleMic = () => {
     localStream?.getAudioTracks().forEach((track) => {
       track.enabled = !track.enabled;
@@ -204,7 +174,6 @@ export default function VideoChat() {
   };
 
   /* ---------------- CHAT ---------------- */
-
   const sendMessage = () => {
     if (!message.trim()) return;
     socket.emit("chat-message", message);
@@ -213,13 +182,13 @@ export default function VideoChat() {
   };
 
   /* ---------------- UI ---------------- */
-
   return (
     <div className="h-screen bg-[#0f172a] text-white flex overflow-hidden">
       {/* VIDEO AREA */}
       <div
-        className={`${showChat ? "w-2/3" : "w-full"
-          } relative transition-all duration-300`}
+        className={`${
+          showChat ? "w-2/3" : "w-full"
+        } relative transition-all duration-300`}
       >
         <VideoSection
           connecting={connecting}
@@ -227,7 +196,6 @@ export default function VideoChat() {
           remoteVideo={remoteVideo}
           camOn={camOn}
         />
-
         <Controls
           micOn={micOn}
           camOn={camOn}
