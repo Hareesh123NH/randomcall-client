@@ -3,16 +3,18 @@ import { socket } from "../socket";
 import VideoSection from "../components/VideoSection";
 import Controls from "../components/Controls";
 import ChatPanel from "../components/ChatPanel";
+import { useNavigate } from "react-router-dom";
 
 export default function VideoChat() {
   const localVideo = useRef(null);
   const remoteVideo = useRef(null);
   const peerRef = useRef(null);
+  const navigate = useNavigate();
 
   const [localStream, setLocalStream] = useState(null);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
-  const [showChat, setShowChat] = useState(true); // ✅ chat open by default
+  const [showChat, setShowChat] = useState(false); // ✅ chat close by default
   const [connecting, setConnecting] = useState(true);
 
   const [message, setMessage] = useState("");
@@ -89,19 +91,14 @@ export default function VideoChat() {
     };
   }, [startMedia]);
 
-
-
   useEffect(() => {
     let pendingCandidates = [];
 
-
-
-    const handleChat = msg => {
-      setMessages(p => [...p, { self: false, text: msg }]);
+    const handleChat = (msg) => {
+      setMessages((p) => [...p, { self: false, text: msg }]);
     };
 
-
-    socket.on("chat-message",handleChat);
+    socket.on("chat-message", handleChat);
 
     socket.on("create-offer", async () => {
       const peer = peerRef.current;
@@ -153,9 +150,7 @@ export default function VideoChat() {
 
         if (data.candidate) {
           if (peer.remoteDescription) {
-            await peer.addIceCandidate(
-              new RTCIceCandidate(data.candidate)
-            );
+            await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
           } else {
             pendingCandidates.push(data.candidate);
           }
@@ -177,15 +172,14 @@ export default function VideoChat() {
       socket.off("wait-offer");
       socket.off("signal");
       socket.off("partner-left");
-      socket.off("chat-message", handleChat);   
+      socket.off("chat-message", handleChat);
     };
-  }, []); ~
-
-    useEffect(() => {
-      if (localVideo.current && localStream) {
-        localVideo.current.srcObject = localStream;
-      }
-    }, [localStream]);
+  }, []);
+  ~useEffect(() => {
+    if (localVideo.current && localStream) {
+      localVideo.current.srcObject = localStream;
+    }
+  }, [localStream]);
 
   /* ---------------- TOGGLES ---------------- */
 
@@ -211,15 +205,72 @@ export default function VideoChat() {
     setMessages((prev) => [...prev, { self: true, text: message }]);
     setMessage("");
   };
+  const handleSwitch = async () => {
+    setConnecting(true);
 
+    // 1️⃣ Close existing peer connection
+    if (peerRef.current) {
+      peerRef.current.ontrack = null;
+      peerRef.current.onicecandidate = null;
+      peerRef.current.close();
+    }
+
+    // 2️⃣ Create fresh peer connection
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    peerRef.current = peer;
+
+    // 3️⃣ Re-attach local tracks
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        peer.addTrack(track, localStream);
+      });
+    }
+
+    peer.ontrack = (e) => {
+      if (remoteVideo.current) {
+        remoteVideo.current.srcObject = e.streams[0];
+      }
+    };
+
+    peer.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.emit("signal", { candidate: e.candidate });
+      }
+    };
+
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "connected") {
+        setConnecting(false);
+      }
+    };
+
+    // 4️⃣ Clear remote video
+    if (remoteVideo.current) {
+      remoteVideo.current.srcObject = null;
+    }
+
+    // 5️⃣ Tell server to switch
+    socket.emit("switch");
+  };
+  const handleEnd = () => {
+    if (peerRef.current) {
+      peerRef.current.close();
+    }
+    socket.disconnect();
+    navigate("/");
+  };
   /* ---------------- UI ---------------- */
 
   return (
     <div className="h-screen bg-[#0f172a] text-white flex overflow-hidden">
       {/* VIDEO AREA */}
       <div
-        className={`${showChat ? "w-2/3" : "w-full"
-          } relative transition-all duration-300`}
+        className={`${
+          showChat ? "w-2/3" : "w-full"
+        } relative transition-all duration-300`}
       >
         <VideoSection
           connecting={connecting}
@@ -234,6 +285,8 @@ export default function VideoChat() {
           toggleMic={toggleMic}
           toggleCamera={toggleCamera}
           toggleChat={() => setShowChat(!showChat)}
+          onSwitch={handleSwitch}
+          onEnd={handleEnd}
         />
       </div>
 
