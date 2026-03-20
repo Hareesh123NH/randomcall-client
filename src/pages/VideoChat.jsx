@@ -286,8 +286,8 @@ export default function VideoChat() {
 
               // Whisper outputs "[BLANK_AUDIO]" or similar tags when it detects silence.
               if (text && !text.includes("[BLANK_AUDIO]")) {
-                console.log("✅ Transcribed:", text);
-                setSubtitle(text);
+                console.log("✅ Transcribed locally, sending to remote:", text);
+                // ONLY send to remote peer, do not show on local screen
                 socket.emit("subtitle", text);
               } else if (text.includes("[BLANK_AUDIO]")) {
                 console.log("🔇 Silence detected (ignored).");
@@ -311,7 +311,7 @@ export default function VideoChat() {
           if (isActive && recorder.state === "recording") {
             recorder.stop();
           }
-        }, 1000);
+        }, 2000);
 
       } catch (err) {
         console.error("❌ Failed to setup transcription recorder:", err);
