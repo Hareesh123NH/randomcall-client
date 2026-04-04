@@ -3,7 +3,7 @@ export default function VideoSection({
   localVideo,
   remoteVideo,
   camOn,
-  subtitle
+  remoteSubtitle,
 }) {
   return (
     <div className="w-full h-full bg-black relative flex items-center justify-center">
@@ -22,13 +22,16 @@ export default function VideoSection({
         className="w-full h-full object-cover scale-x-[-1]"
       />
 
-      <div className="absolute bottom-24 left-0 w-full flex justify-center px-4 pointer-events-none">
-        <div className="bg-black/60 text-white px-4 py-2 rounded-lg max-w-2xl text-center text-lg font-medium">
-          {subtitle}
+      {/* Remote person's subtitles — above main video */}
+      {remoteSubtitle ? (
+        <div className="absolute bottom-24 left-0 w-full flex justify-center px-4 pointer-events-none">
+          <div className="bg-black/60 text-white px-4 py-2 rounded-lg max-w-2xl text-center text-lg font-medium">
+            {remoteSubtitle}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Local preview */}
+      {/* Local preview + local subtitles */}
       <div className="absolute bottom-6 right-6 w-44 h-32 rounded-xl overflow-hidden border border-gray-600 bg-black">
         <video
           ref={localVideo}
