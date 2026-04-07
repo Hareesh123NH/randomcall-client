@@ -3,16 +3,44 @@ import { socket } from "../socket";
 import VideoSection from "../components/VideoSection";
 import Controls from "../components/Controls";
 import ChatPanel from "../components/ChatPanel";
+// eslint-disable-next-line no-unused-vars
 import { pipeline, env } from "@xenova/transformers";
+import { SarvamAIClient } from "sarvamai";
+
+const SARVAM_API_KEY = import.meta.env.VITE_SARVAM_API_KEY;
 
 // Required for Vite/browser environments
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 env.backends.onnx.logLevel = "fatal"; // Suppress the massive block of harmless ONNX graph warnings
 
+const float32ToRawPCMBase64 = (float32Array) => {
+  const pcmBuffer = new ArrayBuffer(float32Array.length * 2);
+  const view = new DataView(pcmBuffer);
+
+  let offset = 0;
+  for (let i = 0; i < float32Array.length; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, float32Array[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true); // true = little endian (pcm_s16le)
+  }
+
+  const uint8Array = new Uint8Array(pcmBuffer);
+  let binaryString = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < uint8Array.length; i += chunkSize) {
+    binaryString += String.fromCharCode.apply(
+      null,
+      uint8Array.subarray(i, i + chunkSize),
+    );
+  }
+  return btoa(binaryString);
+};
+
 const getAudioDataAt16kHz = async (blob) => {
   const arrayBuffer = await blob.arrayBuffer();
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+    sampleRate: 16000,
+  });
   const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
   return audioBuffer.getChannelData(0);
 };
@@ -21,6 +49,7 @@ export default function VideoChat() {
   const localVideo = useRef(null);
   const remoteVideo = useRef(null);
   const peerRef = useRef(null);
+  // eslint-disable-next-line no-unused-vars
   const transcriberRef = useRef(null);
 
   const [localStream, setLocalStream] = useState(null);
@@ -32,11 +61,14 @@ export default function VideoChat() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
 
-  const [subtitle, setSubtitle] = useState("");
-  const [modelLoaded, setModelLoaded] = useState(false);
+  const [remoteSubtitle, setRemoteSubtitle] = useState("");
+  // eslint-disable-next-line no-unused-vars
+  const [modelLoaded, setModelLoaded] = useState(true); // For Sarvam, directly true
 
   /* ---------------- LOAD WHISPER MODEL ---------------- */
   useEffect(() => {
+    // Commenting out Whisper
+    /*
     const loadModel = async () => {
       try {
         if (!transcriberRef.current) {
@@ -52,6 +84,8 @@ export default function VideoChat() {
       }
     };
     loadModel();
+    */
+    // For SarvamAI, we bypass Whisper loading
   }, []);
 
   /* ---------------- START MEDIA ---------------- */
@@ -128,15 +162,16 @@ export default function VideoChat() {
   useEffect(() => {
     let pendingCandidates = [];
 
-    const handleChat = msg => {
-      setMessages(p => [...p, { self: false, text: msg }]);
+    const handleChat = (msg) => {
+      setMessages((p) => [...p, { self: false, text: msg }]);
     };
 
     socket.on("chat-message", handleChat);
 
     socket.on("subtitle", (text) => {
-      console.log("📺 Subtitle received:", text);
-      setSubtitle(text);
+      console.log("📺 Remote subtitle received:", text);
+      setRemoteSubtitle(text);
+      setTimeout(() => setRemoteSubtitle(""), 2000); // auto-clear after 2s
     });
 
     socket.on("create-offer", async () => {
@@ -160,7 +195,7 @@ export default function VideoChat() {
       try {
         if (data.offer) {
           await peer.setRemoteDescription(
-            new RTCSessionDescription(data.offer)
+            new RTCSessionDescription(data.offer),
           );
 
           // Add queued candidates
@@ -177,7 +212,7 @@ export default function VideoChat() {
 
         if (data.answer) {
           await peer.setRemoteDescription(
-            new RTCSessionDescription(data.answer)
+            new RTCSessionDescription(data.answer),
           );
 
           // Add queued candidates
@@ -189,9 +224,7 @@ export default function VideoChat() {
 
         if (data.candidate) {
           if (peer.remoteDescription) {
-            await peer.addIceCandidate(
-              new RTCIceCandidate(data.candidate)
-            );
+            await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
           } else {
             pendingCandidates.push(data.candidate);
           }
@@ -206,7 +239,7 @@ export default function VideoChat() {
       if (remoteVideo.current) {
         remoteVideo.current.srcObject = null;
       }
-      setSubtitle(""); // clear subtitle when partner leaves
+      setRemoteSubtitle(""); // clear subtitle when partner leaves
     });
 
     return () => {
@@ -215,13 +248,17 @@ export default function VideoChat() {
       socket.off("signal");
       socket.off("partner-left");
       socket.off("chat-message", handleChat);
-      socket.off("subtitle")
+      socket.off("subtitle");
     };
   }, []);
 
   /* ---------------- LIVE AUDIO TRANSCRIPTION ---------------- */
   useEffect(() => {
-    if (!localStream || localStream.getAudioTracks().length === 0 || !modelLoaded) {
+    if (
+      !localStream ||
+      localStream.getAudioTracks().length === 0 ||
+      !modelLoaded
+    ) {
       return;
     }
 
@@ -230,26 +267,109 @@ export default function VideoChat() {
     let isActive = true;
     let currentMediaRecorder = null;
 
+    // --- Initialize Sarvam AI Client ONCE per session ---
+    let sarvamSocket = null;
+    let socketOpen = false;
+
+    const initSarvam = async () => {
+      try {
+        console.log("_API KEY___", SARVAM_API_KEY);
+        const client = new SarvamAIClient({
+          apiSubscriptionKey: SARVAM_API_KEY,
+        });
+
+        // connect() returns a Promise, so we MUST await it!
+        sarvamSocket = await client.speechToTextStreaming.connect({
+          model: "saaras:v3",
+          mode: "translate",
+          "language-code": "en-IN",
+          high_vad_sensitivity: "true",
+          reconnectAttempts: 3,
+          input_audio_codec: "pcm_s16le", // Explicitly state raw 16-bit PCM since it's a stream
+        });
+
+        sarvamSocket.on("open", () => {
+          console.log("✅ Sarvam WebSocket OPENED! Ready for audio chunks.");
+          socketOpen = true;
+        });
+
+        sarvamSocket.on("error", (error) => {
+          console.error("❌ Sarvam WebSocket Error:", error);
+        });
+
+        // Intercept raw websocket messages to see if the SDK is crashing during parse
+        if (sarvamSocket.socket) {
+          sarvamSocket.socket.addEventListener("message", (event) => {
+            console.log("🌐 RAW WS MESSAGE EVENT:", event.data);
+          });
+          sarvamSocket.socket.addEventListener("error", (err) => {
+            console.error("🌐 RAW WS ERROR EVENT:", err);
+          });
+        }
+
+        sarvamSocket.on("close", () => {
+          console.log("Sarvam socket closed");
+          socketOpen = false;
+        });
+
+        sarvamSocket.on("message", (response) => {
+          console.log("Result:", response);
+          let text = "";
+
+          if (typeof response === "string") {
+            try {
+              const parsed = JSON.parse(response);
+              if (parsed.data?.transcript) text = parsed.data.transcript;
+              else if (parsed.text) text = parsed.text;
+              else if (parsed.transcript) text = parsed.transcript;
+            } catch {
+              // Ignore parse errors
+              text = response;
+            }
+          } else if (response?.data?.transcript !== undefined) {
+            text = response.data.transcript; // ✅ Main path: {type:"data", data:{transcript:"..."}}
+          } else if (response?.text) {
+            text = response.text;
+          } else if (response?.transcript) {
+            text = response.transcript;
+          }
+
+          console.log("✅ Translated", text);
+
+          if (text && text.trim() && !text.includes("[BLANK_AUDIO]")) {
+            console.log("✅ Translated with Sarvam, sending to remote:", text);
+            socket.emit("subtitle", text); // Send to remote partner
+          }
+        });
+      } catch (err) {
+        console.error("Failed to initialize Sarvam Socket:", err);
+      }
+    };
+
+    initSarvam();
+
     const recordAndTranscribe = () => {
       if (!isActive) return;
 
       try {
-        const options = MediaRecorder.isTypeSupported("audio/webm") ? { mimeType: "audio/webm" } : undefined;
+        const options = MediaRecorder.isTypeSupported("audio/webm")
+          ? { mimeType: "audio/webm" }
+          : undefined;
 
         // CRITICAL: localStream contains both Video and Audio tracks!
-        // Recording a Video track into an audio/webm codec crashes MediaRecorder.
-        // We must create an audio-only stream.
-        const activeAudioTracks = localStream.getAudioTracks().filter(t => t.readyState === "live");
+        const activeAudioTracks = localStream
+          .getAudioTracks()
+          .filter((t) => t.readyState === "live");
         if (activeAudioTracks.length === 0) {
-          console.warn("⚠️ No live audio tracks found! Stopping transcription loop.");
+          console.warn(
+            "⚠️ No live audio tracks found! Stopping transcription loop.",
+          );
           return;
         }
 
         const audioOnlyStream = new MediaStream(activeAudioTracks);
-
-        // Define isolated instances for THIS iteration
         const recorder = new MediaRecorder(audioOnlyStream, options);
-        currentMediaRecorder = recorder; // update global reference for cleanup
+        currentMediaRecorder = recorder;
 
         let localAudioChunks = [];
 
@@ -260,71 +380,95 @@ export default function VideoChat() {
         };
 
         recorder.onstop = async () => {
-          console.log(`⏹️ Recording stopped. Chunks collected: ${localAudioChunks.length}`);
+          console.log(
+            `⏹️ Recording stopped. Chunks collected: ${localAudioChunks.length}`,
+          );
 
-          // 1. Immediately kick off the next recording loop
           if (isActive) {
             console.log("➡️ Restarting next loop...");
             recordAndTranscribe();
-          } else {
-            console.log("🛑 isActive is false, discarding loop repeat.");
           }
 
-          console.log(`Chunks collected BEFORE transcription: ${localAudioChunks.length}`);
+          // 2. Transcribe the chunk we just recorded
+          if (localAudioChunks.length > 0) {
+            const blob = new Blob(localAudioChunks, {
+              type: recorder.mimeType || "audio/webm",
+            });
 
-          // 2. Transcribe the chunk we just recorded if the pipeline is ready
-          if (localAudioChunks.length > 0 && transcriberRef.current) {
-            // Because localAudioChunks is isolated, it hasn't been cleared by the next loop!
-            const blob = new Blob(localAudioChunks, { type: recorder.mimeType || "audio/webm" });
+            // Ignore tiny empty blobs (usually 110 bytes of webm headers)
+            if (blob.size < 1000) {
+              console.log(`Skipping small blob of size ${blob.size} bytes.`);
+              return;
+            }
+
             try {
-              console.log(`⚙️ Decoding ${blob.size} byte blob into 16kHz Float32Array...`);
+              console.log(
+                `⚙️ Decoding ${blob.size} byte blob into 16kHz Float32Array...`,
+              );
               const audioData = await getAudioDataAt16kHz(blob);
+              console.log("🧠 Passing raw PCM chunk to Sarvam API...");
+              const base64Audio = float32ToRawPCMBase64(audioData);
 
-              console.log("🧠 Passing array to Whisper model...");
-              const output = await transcriberRef.current(audioData);
-              const text = output.text ? output.text.trim() : "";
+              if (
+                sarvamSocket &&
+                (socketOpen || sarvamSocket.readyState === 1)
+              ) {
+                console.log("🚀 Calling sarvamSocket.transcribe()...");
+                sarvamSocket.transcribe({
+                  audio: base64Audio,
+                  sample_rate: 16000,
+                  encoding: "audio/wav",
+                });
 
-              // Whisper outputs "[BLANK_AUDIO]" or similar tags when it detects silence.
-              if (text && !text.includes("[BLANK_AUDIO]")) {
-                console.log("✅ Transcribed locally, sending to remote:", text);
-                // ONLY send to remote peer, do not show on local screen
-                socket.emit("subtitle", text);
-              } else if (text.includes("[BLANK_AUDIO]")) {
-                console.log("🔇 Silence detected (ignored).");
+                // Explicitly send a flush signal so the server knows this chunk is complete
+                // and forces the transcript to be returned immediately instead of buffering.
+                if (typeof sarvamSocket.flush === "function") {
+                  sarvamSocket.flush();
+                  console.log("💨 Called sarvamSocket.flush() successfully!");
+                } else {
+                  console.warn("⚠️ sarvamSocket.flush is not a function!");
+                }
               } else {
-                console.log("🈳 Empty transcription object returned.");
+                console.warn("⚠️ Sarvam Socket not open, skipping chunk...");
               }
             } catch (err) {
               console.error("❌ Transcription error:", err);
             }
           } else {
-            console.warn("⚠️ No chunks collected or transcriber missing. Skipping transcription step.");
+            console.warn(
+              "⚠️ No chunks collected. Skipping transcription step.",
+            );
           }
         };
 
-        // Start recording the current loop
         recorder.start();
         console.log("⏺️ MediaRecorder started successfully.");
 
-        // Stop recording after 2 seconds to force the onstop logic & transcription
+        // Stop recording after 2 seconds
         setTimeout(() => {
           if (isActive && recorder.state === "recording") {
             recorder.stop();
           }
-        }, 2000);
-
+        }, 3000);
       } catch (err) {
         console.error("❌ Failed to setup transcription recorder:", err);
       }
     };
 
-    // Begin loop immediately 
+    // Begin loop immediately
     recordAndTranscribe();
 
     return () => {
       isActive = false;
       if (currentMediaRecorder && currentMediaRecorder.state === "recording") {
         currentMediaRecorder.stop();
+      }
+      if (sarvamSocket) {
+        try {
+          sarvamSocket.close();
+        } catch {
+          // ignore
+        }
       }
     };
   }, [localStream, modelLoaded]);
@@ -367,15 +511,16 @@ export default function VideoChat() {
     <div className="h-screen bg-[#0f172a] text-white flex overflow-hidden">
       {/* VIDEO AREA */}
       <div
-        className={`${showChat ? "w-2/3" : "w-full"
-          } relative transition-all duration-300`}
+        className={`${
+          showChat ? "w-2/3" : "w-full"
+        } relative transition-all duration-300`}
       >
         <VideoSection
           connecting={connecting}
           localVideo={localVideo}
           remoteVideo={remoteVideo}
           camOn={camOn}
-          subtitle={subtitle}
+          remoteSubtitle={remoteSubtitle}
         />
 
         <Controls
