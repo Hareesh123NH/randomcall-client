@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { socket } from "../socket";
 import VideoSection from "../components/VideoSection";
 import Controls from "../components/Controls";
@@ -46,9 +47,22 @@ const getAudioDataAt16kHz = async (blob) => {
 };
 
 export default function VideoChat() {
+  const navigate = useNavigate();
   const localVideo = useRef(null);
   const remoteVideo = useRef(null);
   const peerRef = useRef(null);
+  const allStreamsRef = useRef([]);
+
+  // Ensure ANY created stream is completely stopped on unmount
+  useEffect(() => {
+    return () => {
+      allStreamsRef.current.forEach((stream) => {
+        stream?.getTracks().forEach((track) => track.stop());
+      });
+      allStreamsRef.current = [];
+    };
+  }, []);
+
   // eslint-disable-next-line no-unused-vars
   const transcriberRef = useRef(null);
 
@@ -96,6 +110,7 @@ export default function VideoChat() {
       audio: true,
     });
 
+    allStreamsRef.current.push(stream);
     setLocalStream(stream);
     return stream;
   }, []);
@@ -118,8 +133,11 @@ export default function VideoChat() {
 
   // 2️⃣ Start media + peer connection
   useEffect(() => {
+    let activeStream = null;
+
     const initCall = async () => {
       const stream = await startMedia();
+      activeStream = stream;
 
       const peer = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -155,6 +173,9 @@ export default function VideoChat() {
     return () => {
       if (peerRef.current) {
         peerRef.current.close();
+      }
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => track.stop());
       }
     };
   }, [startMedia]);
@@ -273,7 +294,7 @@ export default function VideoChat() {
 
     const initSarvam = async () => {
       try {
-        console.log("_API KEY___", SARVAM_API_KEY);
+        // console.log("_API KEY___", SARVAM_API_KEY);
         const client = new SarvamAIClient({
           apiSubscriptionKey: SARVAM_API_KEY,
         });
@@ -496,6 +517,17 @@ export default function VideoChat() {
     });
   };
 
+  const onSwitch = () => {
+    window.location.reload();
+  };
+
+  const onEnd = () => {
+    allStreamsRef.current.forEach((stream) => {
+      stream?.getTracks().forEach((track) => track.stop());
+    });
+    navigate("/");
+  };
+
   /* ---------------- CHAT ---------------- */
 
   const sendMessage = () => {
@@ -529,6 +561,8 @@ export default function VideoChat() {
           toggleMic={toggleMic}
           toggleCamera={toggleCamera}
           toggleChat={() => setShowChat(!showChat)}
+          onSwitch={onSwitch}
+          onEnd={onEnd}
         />
       </div>
 
