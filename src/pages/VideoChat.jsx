@@ -540,12 +540,18 @@ export default function VideoChat() {
   /* ---------------- UI ---------------- */
 
   return (
-    <div className="h-screen bg-[#0f172a] text-white flex overflow-hidden">
+    <div className="h-screen bg-[#020617] text-white flex flex-col md:flex-row overflow-hidden relative font-sans">
+      
+      {/* Background Animated Blobs */}
+      <div className="absolute top-0 left-0 w-[400px] h-[400px] bg-indigo-600/20 rounded-full blur-[140px] pointer-events-none -z-10 animate-pulse"></div>
+      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-purple-600/20 rounded-full blur-[140px] pointer-events-none -z-10 animate-pulse" style={{ animationDelay: '1.5s' }}></div>
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[150px] pointer-events-none -z-10"></div>
+
       {/* VIDEO AREA */}
       <div
         className={`${
-          showChat ? "w-2/3" : "w-full"
-        } relative transition-all duration-300`}
+          showChat ? "h-1/2 md:h-full md:w-2/3" : "h-full w-full"
+        } relative transition-all duration-500 shrink-0 md:shrink z-10 flex flex-col justify-center items-center`}
       >
         <VideoSection
           connecting={connecting}
@@ -568,7 +574,7 @@ export default function VideoChat() {
 
       {/* CHAT AREA */}
       {showChat && (
-        <div className="w-1/3 min-w-75 border-l border-gray-700 bg-[#1e293b]">
+        <div className="h-1/2 md:h-full w-full md:w-1/3 min-w-[320px] md:border-l border-white/10 bg-[#020617]/70 backdrop-blur-2xl shadow-[-20px_0_40px_rgba(0,0,0,0.3)] relative z-20 transition-all duration-300">
           <ChatPanel
             messages={messages}
             message={message}
