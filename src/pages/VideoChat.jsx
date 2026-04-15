@@ -278,7 +278,8 @@ export default function VideoChat() {
     if (
       !localStream ||
       localStream.getAudioTracks().length === 0 ||
-      !modelLoaded
+      !modelLoaded ||
+      connecting
     ) {
       return;
     }
@@ -492,7 +493,7 @@ export default function VideoChat() {
         }
       }
     };
-  }, [localStream, modelLoaded]);
+  }, [localStream, modelLoaded, connecting]);
 
   /* ---------------- VIDEO SYNC ---------------- */
   useEffect(() => {
@@ -541,10 +542,12 @@ export default function VideoChat() {
 
   return (
     <div className="h-screen bg-[#020617] text-white flex flex-col md:flex-row overflow-hidden relative font-sans">
-      
       {/* Background Animated Blobs */}
       <div className="absolute top-0 left-0 w-[400px] h-[400px] bg-indigo-600/20 rounded-full blur-[140px] pointer-events-none -z-10 animate-pulse"></div>
-      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-purple-600/20 rounded-full blur-[140px] pointer-events-none -z-10 animate-pulse" style={{ animationDelay: '1.5s' }}></div>
+      <div
+        className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-purple-600/20 rounded-full blur-[140px] pointer-events-none -z-10 animate-pulse"
+        style={{ animationDelay: "1.5s" }}
+      ></div>
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[150px] pointer-events-none -z-10"></div>
 
       {/* VIDEO AREA */}
